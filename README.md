@@ -1,5 +1,5 @@
 # Automating_Database
-SQL Scripting can help us in making thing easier for better development and performaces
+SQL Scripting can help us in making thing easier for better development and performances
 
 ## Automation is about
 - Creating Model Class using SQL Script
