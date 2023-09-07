@@ -1,5 +1,5 @@
 # Automating_Database
-This repo is all about the creating any level of object in database via SQL Scripting
+SQL Scripting can help us in making thing easier for better development and performaces
 
 ## Automation is about
 - Creating Model Class using SQL Script
