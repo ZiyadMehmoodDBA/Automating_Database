@@ -1,6 +1,6 @@
 ﻿-- =============================================
 -- Author:		Ziyad Mehmood
--- Description:	This procedure helps in creating the tables for any table
+-- Description:	This procedure helps in creating the table
  -- Exec [dbo].[usp_MSOCreateTable] 
 	--@InputSQL= 'InvestigationSignedoffID Int ,TreatmentPlanDayID Int,InvestigationID Int,InvestigationSignedDate DateTime',
 	--@TableName = 'tblPatientInvestigationsSignedoff',
