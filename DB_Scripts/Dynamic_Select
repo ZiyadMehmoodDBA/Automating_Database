@@ -1,0 +1,88 @@
+CREATE procedure [dbo].[Dynamic_select] 
+@tablename varchar(800)
+--,@DbName nvarchar(200)
+AS
+-- This dynamic Select method creates the select procedure 
+declare @vtblcolumns varchar(max)
+declare @vcolumns1 varchar(max)
+declare @vcolumns2 varchar(max)
+declare @vtblDtypes varchar(max)
+Declare @vstr varchar(max) 
+declare @vColumns varchar(max)
+Declare @vPKcol varchar(250)
+declare @Sid varchar(200)
+
+
+  SELECT @sid =  TABLE_NAME FROM information_schema.tables WHERE table_name = @tablename AND OBJECTPROPERTY(OBJECT_ID(TABLE_NAME), 'TableHasIdentity') =1
+
+  Select @vPKcol = c.COLUMN_NAME 
+	from 	INFORMATION_SCHEMA.TABLE_CONSTRAINTS pk ,
+        	INFORMATION_SCHEMA.KEY_COLUMN_USAGE c
+        	where 	pk.TABLE_NAME = @tableName
+            and	CONSTRAINT_TYPE = 'PRIMARY KEY'
+		    and	c.TABLE_NAME = pk.TABLE_NAME
+		    and	c.CONSTRAINT_NAME = pk.CONSTRAINT_NAME
+
+  select @vtblcolumns =  COALESCE(@vtblcolumns+',','')+ COLUMN_NAME + '='+'@P'+ COLUMN_NAME + ' 'from information_schema.columns where TABLE_NAME= @tablename  AND COLUMN_NAME NOT IN (@vPKcol)
+  
+  if @sid = null 
+    select @vcolumns1 =    COALESCE(@vcolumns1+',','')+ COLUMN_NAME,@vColumns2 = COALESCE(@vColumns2+',','') + '@p'+ Column_NAME from information_schema.columns where TABLE_NAME= @tablename 
+  else 
+ select @vcolumns1 =    COALESCE(@vcolumns1+',','')+ COLUMN_NAME,@vColumns2 = COALESCE(@vColumns2+',','') + '@p'+ Column_NAME from information_schema.columns where TABLE_NAME= @tablename and COLUMN_NAME <> @vPKcol
+--	Select  from information_schema.columns where TABLE_NAME =@tablename
+
+   
+      
+      Select @vColumns = COALESCE(@vColumns+',','') + 
+	    '@p'+ Column_NAME + ' ' + 
+		Data_Type  + 
+		case when Character_Maximum_length > 0 then
+			'(' + cast(Character_Maximum_length as varchar(10)) + ')'
+		else ''
+		end from information_schema.columns where TABLE_NAME =@tablename
+  
+
+
+Select @vstr = 
+'
+IF Object_ID ( ''UP_'+@tablename+'_InsertUpdate '') IS NOT NULL
+	DROP Procedure UP_'+@tablename+'_InsertUpdate
+GO
+
+SET ANSI_NULLS ON  
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+
+-- =============================================
+-- Author:		'+system_user+'
+-- Create date: '+convert (varchar (50),getdate(),103)+'
+-- Description:	This is Auto Generated Code for '+@tablename+' Insert and Update Record for Single Primary Key Table
+-- =============================================
+CREATE PROCEDURE UP_'+@tablename+'_InsertUpdate 
+('+@vColumns+ '	
+)
+As
+BEGIN
+SET NOCOUNT ON;
+
+	IF EXISTS (Select '+@vpkcol+' from '+@tablename+ ' where '+@vpkcol+'='+'@p'+@vpkcol+ ')
+	BEGIN
+	UPDATE '+@tablename+' 
+	SET '+@vtblcolumns+' 
+	WHERE '+ @vPKcol + '='+'@p'+@vpkcol+ '
+	END
+	ELSE
+	BEGIN
+	INSERT INTO '+@tablename+ '('+@vcolumns1+') 
+						VALUES ('+@vColumns2+')
+
+    SET ' +'@p'+@vPKcol+' = Scope_Identity()
+	END
+
+RETURN  ' +'@p'+@vPKcol+'
+
+End
+GO
+'
+Print @vstr 
