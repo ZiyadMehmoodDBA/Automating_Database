@@ -1,0 +1,341 @@
+--What requests are currently executing
+Select * from sys.dm_exec_requests
+
+
+--Find all of DMV's and DMF's from DB System
+Select name, type_desc from sys.system_objects Where name like 'dm_%' Order by Name
+
+--Find slow running queries
+SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED
+SELECT TOP 20
+CAST(qs.total_elapsed_time / 1000000.0 AS  DECIMAL(28, 2))
+AS [Total Elapsed Duration (s)]
+, qs.execution_count
+, SUBSTRING (qt.text,(qs.statement_start_offset/2) + 1,
+((CASE WHEN qs.statement_end_offset = -1
+THEN LEN(CONVERT(NVARCHAR(MAX), qt.text)) * 2
+ELSE
+qs.statement_end_offset
+END - qs.statement_start_offset)/2) + 1) AS [Individual Query]
+, qt.text AS [Parent Query]
+, DB_NAME(qt.dbid) AS DatabaseName
+, qp.query_plan
+FROM sys.dm_exec_query_stats qs
+CROSS APPLY sys.dm_exec_sql_text(qs.sql_handle) qt
+CROSS APPLY sys.dm_exec_query_plan(qs.plan_handle) qp
+--WHERE qt.text like'%Max_Proc_Get_Insurance_Count%'
+ORDER BY total_elapsed_time DESC
+
+
+-- Find those missing in indexes
+SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED
+SELECT TOP 20
+ROUND(s.avg_total_user_cost * s.avg_user_impact *
+(s.user_seeks + s.user_scans),0) AS [Total Cost]
+, s.avg_user_impact
+, d.statement AS TableName
+, d.equality_columns
+, d.inequality_columns
+, d.included_columns
+,'CREATE INDEX [IDX_' + OBJECT_NAME(d.[object_id], d.[database_id]) + '_' + REPLACE(REPLACE(REPLACE(ISNULL(d.[equality_columns], ''), ', ', '_'), '[', ''), ']', '') + CASE
+        WHEN d.[equality_columns] IS NOT NULL
+            AND d.[inequality_columns] IS NOT NULL
+            THEN '_'
+        ELSE ''
+        END + REPLACE(REPLACE(REPLACE(ISNULL(d.[inequality_columns], ''), ', ', '_'), '[', ''), ']', '') + '_' + LEFT(CAST(NEWID() AS [nvarchar](64)), 5) + ']' + ' ON ' + 
+		d.[statement] + ' (' + ISNULL(d.[equality_columns], '') + CASE
+        WHEN d.[equality_columns] IS NOT NULL
+            AND d.[inequality_columns] IS NOT NULL
+            THEN ','
+        ELSE ''
+        END + ISNULL(d.[inequality_columns], '') + ')' + ISNULL(' INCLUDE (' + d.[included_columns] + ')', '') AS [ProposedIndex]
+FROM sys.dm_db_missing_index_groups g
+INNER JOIN sys.dm_db_missing_index_group_stats s
+ON s.group_handle = g.index_group_handle
+INNER JOIN sys.dm_db_missing_index_details d
+ON d.index_handle = g.index_handle
+INNER JOIN [sys].[databases] db WITH (NOLOCK) ON db.[database_id] = d.[database_id]
+ORDER BY [Total Cost] DESC
+
+
+-- Identify what SQL is running now
+SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED
+SELECT
+er.session_Id AS [Spid]
+, sp.ecid
+, DB_NAME(sp.dbid) AS [Database]
+, sp.nt_username
+, er.status
+, er.wait_type
+, SUBSTRING (qt.text, (er.statement_start_offset/2) + 1,
+((CASE WHEN er.statement_end_offset = -1
+THEN LEN(CONVERT(NVARCHAR(MAX), qt.text)) * 2
+ELSE er.statement_end_offset
+END - er.statement_start_offset)/2) + 1) AS [Individual Query]
+, qt.text AS [Parent Query]
+, sp.program_name
+, sp.Hostname
+, sp.nt_domain
+, er.start_time
+FROM sys.dm_exec_requests er
+INNER JOIN sys.sysprocesses sp ON er.session_id = sp.spid
+CROSS APPLY sys.dm_exec_sql_text(er.sql_handle)as qt
+WHERE session_Id > 50
+AND session_Id NOT IN (@@SPID)
+ORDER BY session_Id, ecid desc
+
+
+--Quickly find a cached plan
+
+SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED
+SELECT TOP 20
+st.text AS [SQL]
+, cp.cacheobjtype
+, cp.objtype
+, COALESCE(DB_NAME(st.dbid),
+DB_NAME(CAST(pa.value AS INT))+'*',
+'Resource') AS [DatabaseName]
+, cp.usecounts AS [Plan usage]
+, qp.query_plan
+FROM sys.dm_exec_cached_plans cp
+CROSS APPLY sys.dm_exec_sql_text(cp.plan_handle) st
+CROSS APPLY sys.dm_exec_query_plan(cp.plan_handle) qp
+OUTER APPLY sys.dm_exec_plan_attributes(cp.plan_handle) pa
+WHERE pa.attribute = 'dbid'
+AND st.text LIKE '%Max_Proc_Get_Approved_Claims_By_Patient_Submission_summary_New%'
+
+
+
+--Create Index idx_Batch_Wise_Checks ON[Medcare_DB].[dbo].[Batch_Wise_Checks]
+--([Batch_Payment_Id], [Deleted])
+
+-- Top 10 Longest running Query
+
+SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED
+SELECT TOP 10
+qs.total_elapsed_time AS [Total Time]
+, qs.execution_count AS [Execution count]
+, SUBSTRING (qt.text,(qs.statement_start_offset/2) + 1,
+((CASE WHEN qs.statement_end_offset = -1
+THEN LEN(CONVERT(NVARCHAR(MAX), qt.text)) * 2
+ELSE
+qs.statement_end_offset
+END - qs.statement_start_offset)/2) + 1) AS [Individual Query]
+, qt.text AS [Parent Query]
+, DB_NAME(qt.dbid) AS DatabaseName
+, qp.query_plan
+FROM sys.dm_exec_query_stats qs
+CROSS APPLY sys.dm_exec_sql_text(qs.sql_handle) as qt
+CROSS APPLY sys.dm_exec_query_plan(qs.plan_handle) qp
+ORDER BY [Total Time] DESC
+
+--Every Once last query
+SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED
+SELECT c.session_id, s.host_name, s.login_name, s.status
+, st.text, s.login_time, s.program_name, *
+FROM sys.dm_exec_connections c
+INNER JOIN sys.dm_exec_sessions s ON c.session_id = s.session_id
+CROSS APPLY sys.dm_exec_sql_text(most_recent_sql_handle) AS st
+ORDER BY c.session_id
+
+--Un used procedures
+SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED
+SELECT s.name, s.type_desc
+FROM sys.procedures s
+LEFT OUTER JOIN sys.dm_exec_procedure_stats d
+ON s.object_id = d.object_id
+WHERE d.object_id IS NULL
+ORDER BY s.name
+
+--
+SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED
+SELECT TOP 20
+st.text AS [SQL]
+, cp.cacheobjtype
+, cp.objtype
+, COALESCE(DB_NAME(st.dbid),
+DB_NAME(CAST(pa.value AS INT))+'*','Resource') AS [DatabaseName]
+, cp.usecounts AS [Plan usage]
+, qp.query_plan
+FROM sys.dm_exec_cached_plans cp
+CROSS APPLY sys.dm_exec_sql_text(cp.plan_handle) st
+CROSS APPLY sys.dm_exec_query_plan(cp.plan_handle) qp
+OUTER APPLY sys.dm_exec_plan_attributes(cp.plan_handle) pa
+WHERE pa.attribute = 'dbid'
+AND st.text LIKE '%PartyType%'
+
+--Most fragmented indexes
+SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED
+SELECT
+DB_NAME() AS DatbaseName
+, SCHEMA_NAME(o.Schema_ID) AS SchemaName
+, OBJECT_NAME(s.[object_id]) AS TableName
+, i.name AS IndexName
+, ROUND(s.avg_fragmentation_in_percent,2) AS [Fragmentation %]
+INTO #TempFragmentation
+FROM sys.dm_db_index_physical_stats(db_id(),null, null, null, null) s
+INNER JOIN sys.indexes i ON s.[object_id] = i.[object_id]
+AND s.index_id = i.index_id
+INNER JOIN sys.objects o ON i.object_id = O.object_id
+WHERE 1=2
+
+EXEC sp_MSForEachDB 'USE [?];
+INSERT INTO #TempFragmentation
+SELECT TOP 20
+DB_NAME() AS DatbaseName
+, SCHEMA_NAME(o.Schema_ID) AS SchemaName
+, OBJECT_NAME(s.[object_id]) AS TableName
+, i.name AS IndexName
+, ROUND(s.avg_fragmentation_in_percent,2) AS [Fragmentation %]
+FROM sys.dm_db_index_physical_stats(db_id(),null, null, null, null) s
+INNER JOIN sys.indexes i ON s.[object_id] = i.[object_id]
+AND s.index_id = i.index_id
+INNER JOIN sys.objects o ON i.object_id = O.object_id
+WHERE s.database_id = DB_ID()
+AND i.name IS NOT NULL
+AND OBJECTPROPERTY(s.[object_id], ''IsMsShipped'') = 0
+ORDER BY [Fragmentation %] DESC'
+
+SELECT top 20 *,'ALTER INDEX '+IndexName+' ON '+TableName+' REORGANIZE;' FROM #TempFragmentation ORDER BY [Fragmentation %] DESC
+DROP TABLE #TempFragmentation
+
+
+SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED
+SELECT
+DB_NAME(database_id) AS DatabaseName
+, COUNT(*) AS [Missing Index Count]
+FROM sys.dm_db_missing_index_details
+GROUP BY DB_NAME(database_id)
+ORDER BY [Missing Index Count] DESC
+
+SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED
+SELECT
+DB_NAME() AS DatbaseName
+, SCHEMA_NAME(O.Schema_ID) AS SchemaName
+, OBJECT_NAME(I.object_id) AS TableName
+, I.name AS IndexName
+INTO #TempNeverUsedIndexes
+FROM sys.indexes I INNER JOIN sys.objects O ON I.object_id = O.object_id
+WHERE 1=2
+EXEC sp_MSForEachDB 'USE [?];
+INSERT INTO #TempNeverUsedIndexes
+SELECT
+DB_NAME() AS DatbaseName
+, SCHEMA_NAME(O.Schema_ID) AS SchemaName
+, OBJECT_NAME(I.object_id) AS TableName
+, I.NAME AS IndexName
+FROM sys.indexes I INNER JOIN sys.objects O ON I.object_id = O.object_id
+LEFT OUTER JOIN sys.dm_db_index_usage_stats S ON S.object_id = I.object_id
+AND I.index_id = S.index_id
+AND DATABASE_ID = DB_ID()
+WHERE OBJECTPROPERTY(O.object_id,''IsMsShipped'') = 0
+AND I.name IS NOT NULL
+AND S.object_id IS NULL'
+
+SELECT * FROM #TempNeverUsedIndexes
+WHERE DatbaseName = 'Medcare_DB'
+ORDER BY DatbaseName, SchemaName, TableName, IndexName
+
+DROP TABLE #TempNeverUsedIndexes
+
+--Spend the longest time being blocked
+SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED
+SELECT TOP 20
+CAST((qs.total_elapsed_time - qs.total_worker_time) /
+1000000.0 AS DECIMAL(28,2)) AS [Total time blocked (s)]
+, CAST(qs.total_worker_time * 100.0 / qs.total_elapsed_time
+AS DECIMAL(28,2)) AS [% CPU]
+, CAST((qs.total_elapsed_time - qs.total_worker_time)* 100.0 /
+qs.total_elapsed_time AS DECIMAL(28, 2)) AS [% Waiting]
+, qs.execution_count
+, CAST((qs.total_elapsed_time - qs.total_worker_time) / 1000000.0
+/ qs.execution_count AS DECIMAL(28, 2)) AS [Blocking average (s)]
+, SUBSTRING (qt.text,(qs.statement_start_offset/2) + 1,
+((CASE WHEN qs.statement_end_offset = -1
+THEN LEN(CONVERT(NVARCHAR(MAX), qt.text)) * 2
+ELSE qs.statement_end_offset
+END - qs.statement_start_offset)/2) + 1) AS [Individual Query]
+, qt.text AS [Parent Query]
+, DB_NAME(qt.dbid) AS DatabaseName
+, qp.query_plan
+FROM sys.dm_exec_query_stats qs
+CROSS APPLY sys.dm_exec_sql_text(qs.sql_handle) as qt
+CROSS APPLY sys.dm_exec_query_plan(qs.plan_handle) qp
+WHERE qs.total_elapsed_time > 0
+ORDER BY [Total time blocked (s)] DESC
+
+
+
+--The queries that use the most CPU
+SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED
+SELECT TOP 20
+CAST((qs.total_worker_time) / 1000000.0 AS DECIMAL(28,2))
+AS [Total CPU time (s)]
+, CAST(qs.total_worker_time * 100.0 / qs.total_elapsed_time
+AS DECIMAL(28,2)) AS [% CPU]
+, CAST((qs.total_elapsed_time - qs.total_worker_time)* 100.0 /
+qs.total_elapsed_time AS DECIMAL(28, 2)) AS [% Waiting]
+, qs.execution_count
+, CAST((qs.total_worker_time) / 1000000.0
+/ qs.execution_count AS DECIMAL(28, 2)) AS [CPU time average (s)]
+, SUBSTRING (qt.text,(qs.statement_start_offset/2) + 1,
+((CASE WHEN qs.statement_end_offset = -1
+THEN LEN(CONVERT(NVARCHAR(MAX), qt.text)) * 2
+ELSE qs.statement_end_offset
+END - qs.statement_start_offset)/2) + 1) AS [Individual Query]
+, qt.text AS [Parent Query]
+, DB_NAME(qt.dbid) AS DatabaseName
+, qp.query_plan
+FROM sys.dm_exec_query_stats qs
+CROSS APPLY sys.dm_exec_sql_text(qs.sql_handle) as qt
+CROSS APPLY sys.dm_exec_query_plan(qs.plan_handle) qp
+WHERE qs.total_elapsed_time > 0
+ORDER BY [Total CPU time (s)] DESC
+
+--The queries that use the most I/O
+SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED
+SELECT TOP 20
+[Total IO] = (qs.total_logical_reads + qs.total_logical_writes)
+, [Average IO] = (qs.total_logical_reads + qs.total_logical_writes) /
+qs.execution_count
+, qs.execution_count
+, SUBSTRING (qt.text,(qs.statement_start_offset/2) + 1,
+((CASE WHEN qs.statement_end_offset = -1
+THEN LEN(CONVERT(NVARCHAR(MAX), qt.text)) * 2
+ELSE qs.statement_end_offset
+END - qs.statement_start_offset)/2) + 1) AS [Individual Query]
+, qt.text AS [Parent Query]
+, DB_NAME(qt.dbid) AS DatabaseName
+, qp.query_plan
+FROM sys.dm_exec_query_stats qs
+CROSS APPLY sys.dm_exec_sql_text(qs.sql_handle) as qt
+CROSS APPLY sys.dm_exec_query_plan(qs.plan_handle) qp
+ORDER BY [Total IO] DESC
+
+--most often executing queries
+SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED
+SELECT TOP 20
+qs.execution_count
+, SUBSTRING (qt.text,(qs.statement_start_offset/2) + 1,
+((CASE WHEN qs.statement_end_offset = -1
+THEN LEN(CONVERT(NVARCHAR(MAX), qt.text)) * 2
+ELSE qs.statement_end_offset
+END - qs.statement_start_offset)/2) + 1) AS [Individual Query]
+, qt.text AS [Parent Query]
+, DB_NAME(qt.dbid) AS DatabaseName
+, qp.query_plan
+FROM sys.dm_exec_query_stats qs
+CROSS APPLY sys.dm_exec_sql_text(qs.sql_handle) as qt
+CROSS APPLY sys.dm_exec_query_plan(qs.plan_handle) qp
+ORDER BY qs.execution_count DESC;
+
+--when a query was last ran
+SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED
+SELECT DISTINCT TOP 20
+qs.last_execution_time
+, qt.text AS [Parent Query]
+, DB_NAME(qt.dbid) AS DatabaseName
+FROM sys.dm_exec_query_stats qs
+CROSS APPLY sys.dm_exec_sql_text(qs.sql_handle) as qt
+WHERE qt.text LIKE '%Max_Get_Transactions_Charges_Claims_Anes%'
+ORDER BY qs.last_execution_time DESC
